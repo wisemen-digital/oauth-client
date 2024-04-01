@@ -16,6 +16,19 @@ export interface OAuth2ClientTokens {
   token_type: string
 }
 
+type GrantType = 'ad' | 'password' | 'refresh_token'
+
+interface ClientOptions {
+  client_id: string
+  code?: string
+  state?: string
+  username?: string
+  password?: string
+  client_secret: string
+  grant_type: GrantType
+  scope?: string
+}
+
 export interface OAuth2ClientTokensWithExpiration extends OAuth2ClientTokens {
   expires_at: number
 }
@@ -42,40 +55,38 @@ export class TokenStore {
     return this.tokens
   }
 
+  private getRefreshToken(): string {
+    return this.tokens.refresh_token
+  }
+
+  private setTokens(tokens: OAuth2ClientTokensWithExpiration): void {
+    this.tokens = tokens
+    this.onTokensRefreshedCallback?.(tokens)
+  }
+
   private async refreshToken(): Promise<void> {
     if (this._promise != null)
       return this._promise
 
     this._promise = new Promise((resolve, reject) => {
-      this.options.axios
-        .post<OAuth2ClientTokens>(
-          this.options.tokenEndpoint,
-          {
-            grant_type: 'refresh_token',
-            refresh_token: this.tokens.refresh_token,
-            client_id: this.options.clientId,
-            client_secret: this.options.clientSecret,
-            scope: this.options.scopes?.join(' '),
-          },
-          {
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-          },
-        )
-        .then(({ data }) => {
-          this.tokens = {
-            ...data,
-            expires_at: Date.now() + data.expires_in * 1000,
-          }
-
-          if (this.onTokensRefreshedCallback)
-            this.onTokensRefreshedCallback(this.tokens)
-
+      this.getNewAccessToken(this.getRefreshToken())
+        .then((tokens) => {
+          this.setTokens(tokens)
           resolve()
         })
         .catch(() => {
-          reject(new Error('Failed to refresh access token'))
+          console.error('Failed to refresh access token, trying again...')
+
+          setTimeout(() => {
+            this.getNewAccessToken(this.getRefreshToken())
+              .then((tokens) => {
+                this.setTokens(tokens)
+                resolve()
+              })
+              .catch(() => {
+                reject(new Error('Failed to refresh access token'))
+              })
+          }, 1000)
         })
         .finally(() => {
           this._promise = null
@@ -88,18 +99,13 @@ export class TokenStore {
   private accessTokenExpired(): boolean {
     return Date.now() >= this.tokens.expires_at
   }
-}
 
-export class OAuth2Client {
-  constructor(private readonly options: OAuth2ClientOptions) {}
-
-  public async login(username: string, password: string): Promise<TokenStore> {
-    const { data } = await this.options.axios.post<OAuth2ClientTokens>(
+  private async getNewAccessToken(refreshToken: string): Promise<OAuth2ClientTokensWithExpiration> {
+    const response = await this.options.axios.post<OAuth2ClientTokens>(
       this.options.tokenEndpoint,
       {
-        grant_type: 'password',
-        username,
-        password,
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
         client_id: this.options.clientId,
         client_secret: this.options.clientSecret,
         scope: this.options.scopes?.join(' '),
@@ -111,11 +117,52 @@ export class OAuth2Client {
       },
     )
 
-    const store = new TokenStore(this.options, {
+    return {
+      refresh_token: response.data.refresh_token,
+      token_type: response.data.token_type,
+      expires_in: response.data.expires_in,
+      scope: response.data.scope,
+      access_token: response.data.access_token,
+      expires_at: Date.now() + response.data.expires_in * 1000,
+    }
+  }
+}
+
+export class OAuth2Client {
+  constructor(private readonly options: OAuth2ClientOptions) {}
+
+  public async loginPassword(username: string, password: string): Promise<TokenStore> {
+    return this.login({
+      grant_type: 'password',
+      username,
+      password,
+      client_id: this.options.clientId,
+      client_secret: this.options.clientSecret,
+      scope: this.options.scopes?.join(' '),
+    })
+  }
+
+  public async loginAuthorization(code: string, state: string, grantType: GrantType): Promise<TokenStore> {
+    return this.login({
+      grant_type: grantType,
+      code,
+      state,
+      client_id: this.options.clientId,
+      client_secret: this.options.clientSecret,
+      scope: this.options.scopes?.join(' '),
+    })
+  }
+
+  private async login(clientOptions: ClientOptions): Promise<TokenStore> {
+    const { data } = await this.options.axios.post<OAuth2ClientTokens>(this.options.tokenEndpoint, clientOptions, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    })
+
+    return new TokenStore(this.options, {
       ...data,
       expires_at: Date.now() + data.expires_in * 1000,
     })
-
-    return store
   }
 }
