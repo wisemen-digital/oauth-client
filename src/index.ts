@@ -16,7 +16,7 @@ export interface OAuth2ClientTokens {
   token_type: string
 }
 
-type GrantType = 'ad' | 'password' | 'refresh_token'
+export type OAuth2ClientGrantType = 'ad' | 'password' | 'refresh_token'
 
 interface ClientOptions {
   client_id: string
@@ -25,7 +25,7 @@ interface ClientOptions {
   username?: string
   password?: string
   client_secret: string
-  grant_type: GrantType
+  grant_type: OAuth2ClientGrantType
   scope?: string
 }
 
@@ -142,7 +142,7 @@ export class OAuth2Client {
     })
   }
 
-  public async loginAuthorization(code: string, state: string, grantType: GrantType): Promise<TokenStore> {
+  public async loginAuthorization(code: string, state: string, grantType: OAuth2ClientGrantType): Promise<TokenStore> {
     return this.login({
       grant_type: grantType,
       code,
